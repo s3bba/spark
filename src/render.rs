@@ -1,4 +1,6 @@
-use std::{convert::TryInto, env, fs};
+use std::convert::TryInto;
+#[cfg(not(spark_embedded_font))]
+use std::{env, fs};
 
 use freetype as ft;
 
@@ -290,32 +292,35 @@ pub(crate) fn tail_text_to_width(
 pub(crate) fn load_font() -> FontRenderer {
     #[cfg(spark_embedded_font)]
     {
-        return FontRenderer::new(EMBEDDED_FONT_BYTES.to_vec());
+        FontRenderer::new(EMBEDDED_FONT_BYTES.to_vec())
     }
 
-    let mut candidates = Vec::new();
-    if let Ok(path) = env::var("SPARK_FONT_FILE") {
-        candidates.push(path);
+    #[cfg(not(spark_embedded_font))]
+    {
+        let mut candidates = Vec::new();
+        if let Ok(path) = env::var("SPARK_FONT_FILE") {
+            candidates.push(path);
+        }
+        candidates.extend(
+            [
+                "/usr/share/fonts/opentype/ibm-plex/IBMPlexMono-Regular.otf",
+                "/usr/share/fonts/truetype/ibm-plex/IBMPlexMono-Regular.ttf",
+                "/usr/share/fonts/OTF/IBMPlexMono-Regular.otf",
+            ]
+            .into_iter()
+            .map(String::from),
+        );
+
+        for path in candidates {
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+
+            return FontRenderer::new(bytes);
+        }
+
+        panic!("failed to load IBM Plex Mono; set SPARK_FONT_FILE to the regular font file");
     }
-    candidates.extend(
-        [
-            "/usr/share/fonts/opentype/ibm-plex/IBMPlexMono-Regular.otf",
-            "/usr/share/fonts/truetype/ibm-plex/IBMPlexMono-Regular.ttf",
-            "/usr/share/fonts/OTF/IBMPlexMono-Regular.otf",
-        ]
-        .into_iter()
-        .map(String::from),
-    );
-
-    for path in candidates {
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-
-        return FontRenderer::new(bytes);
-    }
-
-    panic!("failed to load IBM Plex Mono; set SPARK_FONT_FILE to the regular font file");
 }
 
 pub(crate) fn scale_px(value: i32, scale: f64) -> i32 {
