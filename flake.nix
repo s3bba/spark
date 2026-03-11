@@ -49,7 +49,7 @@
         in
         rustPlatform.buildRustPackage {
           pname = "spark";
-          version = "0.1.0";
+          version = "0.0.0";
           src = lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
           SPARK_EMBEDDED_FONT_FILE =
