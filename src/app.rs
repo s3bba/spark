@@ -50,10 +50,10 @@ const LAUNCHER_HEIGHT: u32 = 288;
 const SURFACE_NAMESPACE: &str = "spark";
 const INPUT_FONT_SIZE: f32 = 16.0;
 const RESULT_FONT_SIZE: f32 = 16.0;
-const TEXT_MARGIN_X: i32 = 16;
-const TEXT_MARGIN_Y: i32 = 12;
-const INPUT_HEIGHT: i32 = 36;
-const SEPARATOR_MARGIN_TOP: i32 = 12;
+const CONTENT_PADDING_X: i32 = 12;
+const INPUT_MARGIN_Y: i32 = 8;
+const INPUT_HEIGHT: i32 = 32;
+const SEPARATOR_MARGIN_TOP: i32 = 8;
 const RESULT_MARGIN_TOP: i32 = 1;
 const RESULT_TEXT_TOP_PADDING: i32 = 4;
 const RESULT_EMPTY_TEXT_TOP_PADDING: i32 = 4;
@@ -222,8 +222,8 @@ impl SparkLauncher {
 
         let input_font_size = INPUT_FONT_SIZE * scale as f32;
         let result_font_size = RESULT_FONT_SIZE * scale as f32;
-        let margin_x = scale_px(TEXT_MARGIN_X, scale);
-        let margin_y = scale_px(TEXT_MARGIN_Y, scale);
+        let content_padding_x = scale_px(CONTENT_PADDING_X, scale);
+        let input_margin_y = scale_px(INPUT_MARGIN_Y, scale);
         let input_height = scale_px(INPUT_HEIGHT, scale);
         let separator_margin_top = scale_px(SEPARATOR_MARGIN_TOP, scale);
         let result_margin_top = scale_px(RESULT_MARGIN_TOP, scale);
@@ -232,9 +232,9 @@ impl SparkLauncher {
         let caret_width = scale_px(CARET_WIDTH, scale).max(1);
 
         let input_metrics = self.font.line_metrics(input_font_size);
-        let input_line_top = margin_y + ((input_height - input_metrics.height).max(0) / 2);
+        let input_line_top = input_margin_y + ((input_height - input_metrics.height).max(0) / 2);
         let input_baseline_y = input_line_top + input_metrics.ascent;
-        let available_width = buffer_width - margin_x * 2;
+        let available_width = buffer_width - content_padding_x * 2;
         let visible_query =
             tail_text_to_width(&self.font, input_font_size, &self.query, available_width);
 
@@ -243,7 +243,7 @@ impl SparkLauncher {
                 canvas,
                 width,
                 height,
-                margin_x,
+                content_padding_x,
                 input_baseline_y,
                 input_font_size,
                 COLOR_PLACEHOLDER,
@@ -254,7 +254,7 @@ impl SparkLauncher {
                 canvas,
                 width,
                 height,
-                margin_x,
+                content_padding_x,
                 input_baseline_y,
                 input_font_size,
                 COLOR_TEXT,
@@ -264,9 +264,9 @@ impl SparkLauncher {
 
         if self.keyboard_focus {
             let caret_x = if self.query.is_empty() {
-                margin_x
+                content_padding_x
             } else {
-                margin_x
+                content_padding_x
                     + self
                         .font
                         .measure_text_width(input_font_size, &visible_query)
@@ -280,7 +280,7 @@ impl SparkLauncher {
             );
         }
 
-        let separator_y = margin_y + input_height + separator_margin_top;
+        let separator_y = input_margin_y + input_height + separator_margin_top;
         fill_rect(
             canvas,
             width,
@@ -291,7 +291,7 @@ impl SparkLauncher {
 
         let result_metrics = self.font.line_metrics(result_font_size);
         let list_top = separator_y + result_margin_top;
-        let list_width = buffer_width - margin_x * 2;
+        let list_width = buffer_width - content_padding_x * 2;
         let list_height = (buffer_height - list_top).max(0);
         let slot_count = MAX_VISIBLE_RESULTS as i32;
         if self.visible_results.is_empty() {
@@ -299,7 +299,7 @@ impl SparkLauncher {
                 canvas,
                 width,
                 height,
-                margin_x,
+                content_padding_x,
                 list_top + empty_text_top_padding + result_metrics.ascent,
                 result_font_size,
                 COLOR_PLACEHOLDER,
@@ -336,7 +336,7 @@ impl SparkLauncher {
                     canvas,
                     width,
                     height,
-                    margin_x,
+                    content_padding_x,
                     baseline_y,
                     result_font_size,
                     COLOR_TEXT,
