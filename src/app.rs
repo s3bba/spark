@@ -41,7 +41,7 @@ use crate::{
     },
     render::{
         FontRenderer, Rect, clear, fill_rect, fill_rect_clipped_to_rounded, fill_rounded_rect,
-        head_text_to_width, load_font, scale_px, tail_text_to_width,
+        head_text_to_width, load_font, scale_px, stroke_rounded_rect, tail_text_to_width,
     },
 };
 
@@ -59,6 +59,7 @@ const RESULT_TEXT_TOP_PADDING: i32 = 4;
 const RESULT_EMPTY_TEXT_TOP_PADDING: i32 = 4;
 const PANEL_RADIUS: i32 = 18;
 const CARET_WIDTH: i32 = 2;
+const SEPARATOR_THICKNESS: i32 = 1;
 
 const COLOR_TRANSPARENT: u32 = 0x0000_0000;
 const COLOR_BACKGROUND: u32 = 0xFF09_090B;
@@ -208,6 +209,16 @@ impl SparkLauncher {
             panel_radius,
             COLOR_BACKGROUND,
         );
+        let separator_thickness = scale_px(SEPARATOR_THICKNESS, scale).max(1);
+        stroke_rounded_rect(
+            canvas,
+            width,
+            height,
+            panel_rect,
+            panel_radius,
+            separator_thickness,
+            COLOR_SEPARATOR,
+        );
 
         let input_font_size = INPUT_FONT_SIZE * scale as f32;
         let result_font_size = RESULT_FONT_SIZE * scale as f32;
@@ -274,7 +285,7 @@ impl SparkLauncher {
             canvas,
             width,
             height,
-            Rect::new(0, separator_y, buffer_width, 1),
+            Rect::new(0, separator_y, buffer_width, separator_thickness),
             COLOR_SEPARATOR,
         );
 

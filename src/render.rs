@@ -245,6 +245,46 @@ pub(crate) fn fill_rounded_rect(
     }
 }
 
+pub(crate) fn stroke_rounded_rect(
+    canvas: &mut [u8],
+    width: usize,
+    height: usize,
+    rect: Rect,
+    radius: i32,
+    stroke_width: i32,
+    color: u32,
+) {
+    let stroke_width = stroke_width.max(0);
+    if stroke_width == 0 || rect.width <= 0 || rect.height <= 0 {
+        return;
+    }
+
+    let inner_rect = Rect::new(
+        rect.x + stroke_width,
+        rect.y + stroke_width,
+        rect.width - stroke_width * 2,
+        rect.height - stroke_width * 2,
+    );
+    let inner_radius = (radius - stroke_width).max(0);
+    let has_inner_rect = inner_rect.width > 0 && inner_rect.height > 0;
+    let x_start = rect.x.max(0) as usize;
+    let y_start = rect.y.max(0) as usize;
+    let x_end = (rect.x + rect.width).min(width as i32).max(0) as usize;
+    let y_end = (rect.y + rect.height).min(height as i32).max(0) as usize;
+
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let inside_outer = rounded_rect_contains(rect, radius, x as i32, y as i32);
+            let inside_inner = has_inner_rect
+                && rounded_rect_contains(inner_rect, inner_radius, x as i32, y as i32);
+
+            if inside_outer && !inside_inner {
+                put_pixel(canvas, width, x, y, color);
+            }
+        }
+    }
+}
+
 pub(crate) fn head_text_to_width(
     font: &FontRenderer,
     font_size: f32,
