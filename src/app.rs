@@ -44,7 +44,7 @@ use crate::{
     },
 };
 
-const LAUNCHER_WIDTH: u32 = 720;
+const LAUNCHER_WIDTH: u32 = 640;
 const LAUNCHER_HEIGHT: u32 = 288;
 const SURFACE_NAMESPACE: &str = "spark";
 const INPUT_FONT_SIZE: f32 = 16.0;
