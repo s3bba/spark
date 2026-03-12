@@ -6,8 +6,6 @@ use std::{
     process::{Command, Stdio},
 };
 
-pub(crate) const MAX_VISIBLE_RESULTS: usize = 8;
-
 pub(crate) struct CommandEntry {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
@@ -85,7 +83,6 @@ pub(crate) fn search_results(commands: &[CommandEntry], query: &str) -> Vec<Sear
             .cmp(&left.score)
             .then_with(|| commands[left.index].name.cmp(&commands[right.index].name))
     });
-    results.truncate(MAX_VISIBLE_RESULTS);
     results
 }
 
@@ -203,5 +200,15 @@ mod tests {
         let results = search_results(&commands, "ls");
 
         assert_eq!(results.first().map(|result| result.index), Some(0));
+    }
+
+    #[test]
+    fn search_returns_all_matches_without_truncation() {
+        let commands = (0..10)
+            .map(|index| command(&format!("cmd-{index}")))
+            .collect::<Vec<_>>();
+        let results = search_results(&commands, "");
+
+        assert_eq!(results.len(), commands.len());
     }
 }

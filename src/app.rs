@@ -36,8 +36,7 @@ use wayland_protocols::wp::{
 
 use crate::{
     commands::{
-        CommandEntry, MAX_VISIBLE_RESULTS, SearchResult, launch_command, launch_path,
-        load_commands, search_results,
+        CommandEntry, SearchResult, launch_command, launch_path, load_commands, search_results,
     },
     render::{
         FontRenderer, Rect, clear, fill_rect, fill_rect_clipped_to_rounded, fill_rounded_rect,
@@ -50,6 +49,7 @@ const LAUNCHER_HEIGHT: u32 = 288;
 const SURFACE_NAMESPACE: &str = "spark";
 const INPUT_FONT_SIZE: f32 = 16.0;
 const RESULT_FONT_SIZE: f32 = 16.0;
+const MAX_VISIBLE_RESULTS: usize = 8;
 const CONTENT_PADDING_X: i32 = 12;
 const INPUT_MARGIN_Y: i32 = 8;
 const INPUT_HEIGHT: i32 = 32;
@@ -58,6 +58,7 @@ const RESULT_MARGIN_TOP: i32 = 1;
 const RESULT_SELECTION_EXPAND_Y: i32 = 1;
 const RESULT_TEXT_TOP_PADDING: i32 = 4;
 const RESULT_EMPTY_TEXT_TOP_PADDING: i32 = 4;
+const INPUT_COUNTER_GAP: i32 = 12;
 const PANEL_RADIUS: i32 = 18;
 const CARET_WIDTH: i32 = 2;
 const SEPARATOR_THICKNESS: i32 = 1;
@@ -138,8 +139,9 @@ pub(crate) fn run() {
         buffer_scale: 1,
         preferred_fractional_scale: None,
         commands,
-        visible_results: Vec::new(),
+        matched_results: Vec::new(),
         selected_result: 0,
+        visible_result_offset: 0,
         query: String::new(),
     };
     app.refresh_results();
@@ -172,8 +174,9 @@ struct SparkLauncher {
     buffer_scale: i32,
     preferred_fractional_scale: Option<f64>,
     commands: Vec<CommandEntry>,
-    visible_results: Vec<SearchResult>,
+    matched_results: Vec<SearchResult>,
     selected_result: usize,
+    visible_result_offset: usize,
     query: String,
 }
 
@@ -231,12 +234,16 @@ impl SparkLauncher {
         let result_selection_expand_y = scale_px(RESULT_SELECTION_EXPAND_Y, scale);
         let result_text_top_padding = scale_px(RESULT_TEXT_TOP_PADDING, scale);
         let empty_text_top_padding = scale_px(RESULT_EMPTY_TEXT_TOP_PADDING, scale);
+        let input_counter_gap = scale_px(INPUT_COUNTER_GAP, scale);
         let caret_width = scale_px(CARET_WIDTH, scale).max(1);
 
         let input_metrics = self.font.line_metrics(input_font_size);
         let input_line_top = input_margin_y + ((input_height - input_metrics.height).max(0) / 2);
         let input_baseline_y = input_line_top + input_metrics.ascent;
-        let available_width = buffer_width - content_padding_x * 2;
+        let counter_text = format!("{}/{}", self.matched_results.len(), self.commands.len());
+        let counter_width = self.font.measure_text_width(input_font_size, &counter_text);
+        let counter_x = buffer_width - content_padding_x - counter_width;
+        let available_width = (counter_x - content_padding_x - input_counter_gap).max(0);
         let visible_query =
             tail_text_to_width(&self.font, input_font_size, &self.query, available_width);
 
@@ -263,6 +270,17 @@ impl SparkLauncher {
                 &visible_query,
             );
         }
+
+        self.font.draw_text(
+            canvas,
+            width,
+            height,
+            counter_x,
+            input_baseline_y,
+            input_font_size,
+            COLOR_PLACEHOLDER,
+            &counter_text,
+        );
 
         if self.keyboard_focus {
             let caret_x = if self.query.is_empty() {
@@ -298,7 +316,16 @@ impl SparkLauncher {
         let entries_bottom = (buffer_height - result_selection_expand_y).max(entries_top);
         let entries_height = (entries_bottom - entries_top).max(0);
         let slot_count = MAX_VISIBLE_RESULTS as i32;
-        if self.visible_results.is_empty() {
+        let visible_start = self.visible_result_offset.min(self.matched_results.len());
+        let visible_end = (visible_start + MAX_VISIBLE_RESULTS).min(self.matched_results.len());
+        let visible_results = &self.matched_results[visible_start..visible_end];
+        let selected_visible_row = if self.selected_result < visible_start {
+            None
+        } else {
+            let row = self.selected_result - visible_start;
+            (row < visible_results.len()).then_some(row)
+        };
+        if visible_results.is_empty() {
             self.font.draw_text(
                 canvas,
                 width,
@@ -310,12 +337,12 @@ impl SparkLauncher {
                 "No matches",
             );
         } else {
-            for (row, result) in self.visible_results.iter().enumerate() {
+            for (row, result) in visible_results.iter().enumerate() {
                 let entry = &self.commands[result.index];
                 let row_index = row as i32;
                 let row_top = entries_top + (row_index * entries_height) / slot_count;
                 let row_bottom = entries_top + ((row_index + 1) * entries_height) / slot_count;
-                if row == self.selected_result {
+                if Some(row) == selected_visible_row {
                     let selection_top = row_top - result_selection_expand_y;
                     let selection_bottom = row_bottom + result_selection_expand_y;
                     fill_rect_clipped_to_rounded(
@@ -436,20 +463,23 @@ impl SparkLauncher {
     }
 
     fn refresh_results(&mut self) {
-        self.visible_results = search_results(&self.commands, &self.query);
+        self.matched_results = search_results(&self.commands, &self.query);
         self.selected_result = 0;
+        self.visible_result_offset = 0;
     }
 
     fn move_selection(&mut self, delta: i32) -> bool {
-        if self.visible_results.is_empty() {
+        if self.matched_results.is_empty() {
             self.selected_result = 0;
+            self.visible_result_offset = 0;
             return false;
         }
 
-        let last_index = self.visible_results.len() as i32 - 1;
+        let last_index = self.matched_results.len() as i32 - 1;
         let next_index = (self.selected_result as i32 + delta).clamp(0, last_index);
         let changed = next_index as usize != self.selected_result;
         self.selected_result = next_index as usize;
+        self.sync_result_window();
         changed
     }
 
@@ -461,7 +491,7 @@ impl SparkLauncher {
 
         if !command.contains(char::is_whitespace) {
             if let Some(path) = self
-                .visible_results
+                .matched_results
                 .get(self.selected_result)
                 .and_then(|result| self.commands.get(result.index))
                 .map(|entry| entry.path.clone())
@@ -479,6 +509,21 @@ impl SparkLauncher {
             Ok(()) => self.exit = true,
             Err(error) => eprintln!("Launch failed: {error}"),
         }
+    }
+
+    fn sync_result_window(&mut self) {
+        let max_offset = self
+            .matched_results
+            .len()
+            .saturating_sub(MAX_VISIBLE_RESULTS);
+
+        if self.selected_result < self.visible_result_offset {
+            self.visible_result_offset = self.selected_result;
+        } else if self.selected_result >= self.visible_result_offset + MAX_VISIBLE_RESULTS {
+            self.visible_result_offset = self.selected_result + 1 - MAX_VISIBLE_RESULTS;
+        }
+
+        self.visible_result_offset = self.visible_result_offset.min(max_offset);
     }
 }
 
