@@ -55,6 +55,7 @@ const INPUT_MARGIN_Y: i32 = 8;
 const INPUT_HEIGHT: i32 = 32;
 const SEPARATOR_MARGIN_TOP: i32 = 8;
 const RESULT_MARGIN_TOP: i32 = 1;
+const RESULT_SELECTION_EXPAND_Y: i32 = 1;
 const RESULT_TEXT_TOP_PADDING: i32 = 4;
 const RESULT_EMPTY_TEXT_TOP_PADDING: i32 = 4;
 const PANEL_RADIUS: i32 = 18;
@@ -227,6 +228,7 @@ impl SparkLauncher {
         let input_height = scale_px(INPUT_HEIGHT, scale);
         let separator_margin_top = scale_px(SEPARATOR_MARGIN_TOP, scale);
         let result_margin_top = scale_px(RESULT_MARGIN_TOP, scale);
+        let result_selection_expand_y = scale_px(RESULT_SELECTION_EXPAND_Y, scale);
         let result_text_top_padding = scale_px(RESULT_TEXT_TOP_PADDING, scale);
         let empty_text_top_padding = scale_px(RESULT_EMPTY_TEXT_TOP_PADDING, scale);
         let caret_width = scale_px(CARET_WIDTH, scale).max(1);
@@ -292,7 +294,9 @@ impl SparkLauncher {
         let result_metrics = self.font.line_metrics(result_font_size);
         let list_top = separator_y + result_margin_top;
         let list_width = buffer_width - content_padding_x * 2;
-        let list_height = (buffer_height - list_top).max(0);
+        let entries_top = list_top + result_selection_expand_y;
+        let entries_bottom = (buffer_height - result_selection_expand_y).max(entries_top);
+        let entries_height = (entries_bottom - entries_top).max(0);
         let slot_count = MAX_VISIBLE_RESULTS as i32;
         if self.visible_results.is_empty() {
             self.font.draw_text(
@@ -300,7 +304,7 @@ impl SparkLauncher {
                 width,
                 height,
                 content_padding_x,
-                list_top + empty_text_top_padding + result_metrics.ascent,
+                entries_top + empty_text_top_padding + result_metrics.ascent,
                 result_font_size,
                 COLOR_PLACEHOLDER,
                 "No matches",
@@ -309,15 +313,21 @@ impl SparkLauncher {
             for (row, result) in self.visible_results.iter().enumerate() {
                 let entry = &self.commands[result.index];
                 let row_index = row as i32;
-                let row_top = list_top + (row_index * list_height) / slot_count;
-                let row_bottom = list_top + ((row_index + 1) * list_height) / slot_count;
-                let row_height = row_bottom - row_top;
+                let row_top = entries_top + (row_index * entries_height) / slot_count;
+                let row_bottom = entries_top + ((row_index + 1) * entries_height) / slot_count;
                 if row == self.selected_result {
+                    let selection_top = row_top - result_selection_expand_y;
+                    let selection_bottom = row_bottom + result_selection_expand_y;
                     fill_rect_clipped_to_rounded(
                         canvas,
                         width,
                         height,
-                        Rect::new(0, row_top, buffer_width, row_height),
+                        Rect::new(
+                            0,
+                            selection_top,
+                            buffer_width,
+                            selection_bottom - selection_top,
+                        ),
                         panel_rect,
                         panel_radius,
                         COLOR_SELECTION,
