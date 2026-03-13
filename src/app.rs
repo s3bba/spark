@@ -8,7 +8,7 @@ use smithay_client_toolkit::{
     reexports::client::{
         Connection, Dispatch, QueueHandle,
         globals::registry_queue_init,
-        protocol::{wl_keyboard, wl_output, wl_seat, wl_shm, wl_surface},
+        protocol::{wl_keyboard, wl_output, wl_region, wl_seat, wl_shm, wl_surface},
     },
     reexports::{
         calloop::{EventLoop, LoopHandle},
@@ -28,6 +28,9 @@ use smithay_client_toolkit::{
         },
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
+};
+use wayland_protocols::ext::background_effect::v1::client::{
+    ext_background_effect_manager_v1, ext_background_effect_surface_v1,
 };
 use wayland_protocols::wp::{
     fractional_scale::v1::client::{wp_fractional_scale_manager_v1, wp_fractional_scale_v1},
@@ -62,14 +65,19 @@ const INPUT_COUNTER_GAP: i32 = 12;
 const PANEL_RADIUS: i32 = 18;
 const CARET_WIDTH: i32 = 2;
 const SEPARATOR_THICKNESS: i32 = 1;
+const PANEL_ALPHA: u8 = 217;
 
 const COLOR_TRANSPARENT: u32 = 0x0000_0000;
-const COLOR_BACKGROUND: u32 = 0xFF09_090B;
+const COLOR_BACKGROUND: u32 = with_alpha(0xFF09_090B, PANEL_ALPHA);
 const COLOR_TEXT: u32 = 0xFFA1_A1AA;
 const COLOR_PLACEHOLDER: u32 = 0xFF71_717A;
 const COLOR_HIGHLIGHT: u32 = 0xFF79_697B;
-const COLOR_SELECTION: u32 = 0xFF18_181B;
-const COLOR_SEPARATOR: u32 = 0xFF18_181B;
+const COLOR_SELECTION: u32 = with_alpha(0xFF18_181B, PANEL_ALPHA);
+const COLOR_SEPARATOR: u32 = with_alpha(0xFF18_181B, PANEL_ALPHA);
+
+const fn with_alpha(color: u32, alpha: u8) -> u32 {
+    (color & 0x00FF_FFFF) | ((alpha as u32) << 24)
+}
 
 pub(crate) fn run() {
     let font = load_font();
@@ -88,6 +96,13 @@ pub(crate) fn run() {
     let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor is not available");
     let layer_shell = LayerShell::bind(&globals, &qh).expect("layer-shell is not available");
     let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
+    let background_effect_manager = globals
+        .bind::<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1, _, _>(
+            &qh,
+            1..=1,
+            (),
+        )
+        .ok();
     let fractional_scale_manager = globals
         .bind::<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())
         .ok();
@@ -111,6 +126,9 @@ pub(crate) fn run() {
     let viewport = viewporter
         .as_ref()
         .map(|viewporter| viewporter.get_viewport(layer.wl_surface(), &qh, ()));
+    let background_effect_surface = background_effect_manager
+        .as_ref()
+        .map(|manager| manager.get_background_effect(layer.wl_surface(), &qh, ()));
     let fractional_scale = fractional_scale_manager
         .as_ref()
         .map(|manager| manager.get_fractional_scale(layer.wl_surface(), &qh, ()));
@@ -120,6 +138,7 @@ pub(crate) fn run() {
 
     let mut app = SparkLauncher {
         registry_state: RegistryState::new(&globals),
+        compositor,
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
         shm,
@@ -130,10 +149,14 @@ pub(crate) fn run() {
         pool,
         layer,
         viewport,
+        _background_effect_manager: background_effect_manager,
+        background_effect_surface,
+        background_blur_supported: false,
         _fractional_scale: fractional_scale,
         keyboard: None,
         keyboard_focus: false,
         modifiers: Modifiers::default(),
+        queue_handle: qh.clone(),
         loop_handle,
         font,
         buffer_scale: 1,
@@ -155,6 +178,7 @@ pub(crate) fn run() {
 
 struct SparkLauncher {
     registry_state: RegistryState,
+    compositor: CompositorState,
     seat_state: SeatState,
     output_state: OutputState,
     shm: Shm,
@@ -165,10 +189,16 @@ struct SparkLauncher {
     pool: SlotPool,
     layer: LayerSurface,
     viewport: Option<wp_viewport::WpViewport>,
+    _background_effect_manager:
+        Option<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1>,
+    background_effect_surface:
+        Option<ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1>,
+    background_blur_supported: bool,
     _fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_focus: bool,
     modifiers: Modifiers,
+    queue_handle: QueueHandle<SparkLauncher>,
     loop_handle: LoopHandle<'static, SparkLauncher>,
     font: FontRenderer,
     buffer_scale: i32,
@@ -190,6 +220,9 @@ impl SparkLauncher {
         let width = buffer_width as usize;
         let height = buffer_height as usize;
         let stride = buffer_width * 4;
+        let panel_radius = scale_px(PANEL_RADIUS, scale);
+
+        self.update_background_blur_region(self.width as i32, self.height as i32, PANEL_RADIUS);
 
         let (buffer, canvas) = self
             .pool
@@ -204,7 +237,6 @@ impl SparkLauncher {
         clear(canvas, COLOR_TRANSPARENT);
 
         let panel_rect = Rect::new(0, 0, buffer_width, buffer_height);
-        let panel_radius = scale_px(PANEL_RADIUS, scale);
         fill_rounded_rect(
             canvas,
             width,
@@ -525,6 +557,99 @@ impl SparkLauncher {
 
         self.visible_result_offset = self.visible_result_offset.min(max_offset);
     }
+
+    fn update_background_blur_region(
+        &self,
+        surface_width: i32,
+        surface_height: i32,
+        panel_radius: i32,
+    ) {
+        let Some(background_effect_surface) = self.background_effect_surface.as_ref() else {
+            return;
+        };
+
+        if !self.background_blur_supported {
+            background_effect_surface.set_blur_region(None);
+            return;
+        }
+
+        let region = self
+            .compositor
+            .wl_compositor()
+            .create_region(&self.queue_handle, ());
+        add_rounded_blur_region(&region, surface_width, surface_height, panel_radius);
+        background_effect_surface.set_blur_region(Some(&region));
+        region.destroy();
+    }
+}
+
+fn add_rounded_blur_region(region: &wl_region::WlRegion, width: i32, height: i32, radius: i32) {
+    for y in 0..height {
+        let mut left = 0;
+        while left < width && !rounded_rect_contains(width, height, radius, left, y) {
+            left += 1;
+        }
+
+        if left >= width {
+            continue;
+        }
+
+        let mut right = width - 1;
+        while right >= left && !rounded_rect_contains(width, height, radius, right, y) {
+            right -= 1;
+        }
+
+        region.add(left, y, right - left + 1, 1);
+    }
+}
+
+fn rounded_rect_contains(width: i32, height: i32, radius: i32, x: i32, y: i32) -> bool {
+    if x < 0 || y < 0 || x >= width || y >= height {
+        return false;
+    }
+
+    let radius = radius.max(0);
+    let radius_squared = radius * radius;
+
+    let dx = if x < radius {
+        radius - x - 1
+    } else if x >= width - radius {
+        x - (width - radius)
+    } else {
+        0
+    };
+    let dy = if y < radius {
+        radius - y - 1
+    } else if y >= height - radius {
+        y - (height - radius)
+    } else {
+        0
+    };
+
+    dx * dx + dy * dy <= radius_squared
+}
+
+impl Dispatch<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1, ()>
+    for SparkLauncher
+{
+    fn event(
+        state: &mut Self,
+        _proxy: &ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+        event: ext_background_effect_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let ext_background_effect_manager_v1::Event::Capabilities { flags } = event {
+            let blur_supported = (u32::from(flags) & 1) != 0;
+            let changed = state.background_blur_supported != blur_supported;
+            state.background_blur_supported = blur_supported;
+
+            if changed && !state.first_configure {
+                state.draw();
+            }
+        }
+    }
 }
 
 impl CompositorHandler for SparkLauncher {
@@ -776,11 +901,15 @@ smithay_client_toolkit::reexports::client::delegate_noop!(
     SparkLauncher: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1
 );
 smithay_client_toolkit::reexports::client::delegate_noop!(
+    SparkLauncher: ignore ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1
+);
+smithay_client_toolkit::reexports::client::delegate_noop!(
     SparkLauncher: ignore wp_viewporter::WpViewporter
 );
 smithay_client_toolkit::reexports::client::delegate_noop!(
     SparkLauncher: ignore wp_viewport::WpViewport
 );
+smithay_client_toolkit::reexports::client::delegate_noop!(SparkLauncher: ignore wl_region::WlRegion);
 
 impl ProvidesRegistryState for SparkLauncher {
     fn registry(&mut self) -> &mut RegistryState {
