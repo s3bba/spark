@@ -609,7 +609,7 @@ fn rounded_rect_contains(width: i32, height: i32, radius: i32, x: i32, y: i32) -
     }
 
     let radius = radius.max(0);
-    let radius_squared = radius * radius;
+    let radius_cubic = cubic(radius);
 
     let dx = if x < radius {
         radius - x - 1
@@ -626,7 +626,12 @@ fn rounded_rect_contains(width: i32, height: i32, radius: i32, x: i32, y: i32) -
         0
     };
 
-    dx * dx + dy * dy <= radius_squared
+    cubic(dx) + cubic(dy) <= radius_cubic
+}
+
+fn cubic(value: i32) -> i64 {
+    let value = value as i64;
+    value * value * value
 }
 
 impl Dispatch<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1, ()>

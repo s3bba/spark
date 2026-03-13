@@ -212,7 +212,7 @@ pub(crate) fn fill_rounded_rect(
     color: u32,
 ) {
     let radius = radius.max(0);
-    let radius_squared = radius * radius;
+    let radius_cubic = cubic(radius);
     let x_start = rect.x.max(0) as usize;
     let y_start = rect.y.max(0) as usize;
     let x_end = (rect.x + rect.width).min(width as i32).max(0) as usize;
@@ -238,7 +238,7 @@ pub(crate) fn fill_rounded_rect(
                 0
             };
 
-            if dx * dx + dy * dy <= radius_squared {
+            if cubic(dx) + cubic(dy) <= radius_cubic {
                 put_pixel(canvas, width, x, y, color);
             }
         }
@@ -373,7 +373,7 @@ fn rounded_rect_contains(rect: Rect, radius: i32, x: i32, y: i32) -> bool {
     }
 
     let radius = radius.max(0);
-    let radius_squared = radius * radius;
+    let radius_cubic = cubic(radius);
     let local_x = x - rect.x;
     let local_y = y - rect.y;
 
@@ -392,7 +392,12 @@ fn rounded_rect_contains(rect: Rect, radius: i32, x: i32, y: i32) -> bool {
         0
     };
 
-    dx * dx + dy * dy <= radius_squared
+    cubic(dx) + cubic(dy) <= radius_cubic
+}
+
+fn cubic(value: i32) -> i64 {
+    let value = value as i64;
+    value * value * value
 }
 
 fn put_pixel(canvas: &mut [u8], width: usize, x: usize, y: usize, color: u32) {
