@@ -196,8 +196,11 @@ pub(crate) fn fill_rect_clipped_to_rounded(
 
     for y in y_start..y_end {
         for x in x_start..x_end {
-            if rounded_rect_contains(clip_rect, radius, x as i32, y as i32) {
+            let coverage = rounded_rect_coverage(clip_rect, radius, x as i32, y as i32);
+            if coverage == 255 {
                 put_pixel(canvas, width, x, y, color);
+            } else if coverage > 0 {
+                blend_pixel_with_coverage(canvas, width, x, y, color, coverage);
             }
         }
     }
@@ -211,8 +214,6 @@ pub(crate) fn fill_rounded_rect(
     radius: i32,
     color: u32,
 ) {
-    let radius = radius.max(0);
-    let radius_cubic = cubic(radius);
     let x_start = rect.x.max(0) as usize;
     let y_start = rect.y.max(0) as usize;
     let x_end = (rect.x + rect.width).min(width as i32).max(0) as usize;
@@ -220,26 +221,11 @@ pub(crate) fn fill_rounded_rect(
 
     for y in y_start..y_end {
         for x in x_start..x_end {
-            let local_x = x as i32 - rect.x;
-            let local_y = y as i32 - rect.y;
-
-            let dx = if local_x < radius {
-                radius - local_x - 1
-            } else if local_x >= rect.width - radius {
-                local_x - (rect.width - radius)
-            } else {
-                0
-            };
-            let dy = if local_y < radius {
-                radius - local_y - 1
-            } else if local_y >= rect.height - radius {
-                local_y - (rect.height - radius)
-            } else {
-                0
-            };
-
-            if cubic(dx) + cubic(dy) <= radius_cubic {
+            let coverage = rounded_rect_coverage(rect, radius, x as i32, y as i32);
+            if coverage == 255 {
                 put_pixel(canvas, width, x, y, color);
+            } else if coverage > 0 {
+                blend_pixel_with_coverage(canvas, width, x, y, color, coverage);
             }
         }
     }
@@ -274,12 +260,17 @@ pub(crate) fn stroke_rounded_rect(
 
     for y in y_start..y_end {
         for x in x_start..x_end {
-            let inside_outer = rounded_rect_contains(rect, radius, x as i32, y as i32);
-            let inside_inner = has_inner_rect
-                && rounded_rect_contains(inner_rect, inner_radius, x as i32, y as i32);
-
-            if inside_outer && !inside_inner {
+            let outer_coverage = rounded_rect_coverage(rect, radius, x as i32, y as i32) as i32;
+            let inner_coverage = if has_inner_rect {
+                rounded_rect_coverage(inner_rect, inner_radius, x as i32, y as i32) as i32
+            } else {
+                0
+            };
+            let stroke_coverage = (outer_coverage - inner_coverage).max(0) as u8;
+            if stroke_coverage == 255 {
                 put_pixel(canvas, width, x, y, color);
+            } else if stroke_coverage > 0 {
+                blend_pixel_with_coverage(canvas, width, x, y, color, stroke_coverage);
             }
         }
     }
@@ -367,39 +358,73 @@ pub(crate) fn scale_px(value: i32, scale: f64) -> i32 {
     ((value as f64) * scale).round() as i32
 }
 
-fn rounded_rect_contains(rect: Rect, radius: i32, x: i32, y: i32) -> bool {
+fn rounded_rect_coverage(rect: Rect, radius: i32, x: i32, y: i32) -> u8 {
     if x < rect.x || y < rect.y || x >= rect.x + rect.width || y >= rect.y + rect.height {
-        return false;
+        return 0;
     }
 
     let radius = radius.max(0);
-    let radius_cubic = cubic(radius);
+    if radius == 0 {
+        return 255;
+    }
+
     let local_x = x - rect.x;
     let local_y = y - rect.y;
+    let corner_x = local_x < radius || local_x >= rect.width - radius;
+    let corner_y = local_y < radius || local_y >= rect.height - radius;
+    if !corner_x || !corner_y {
+        return 255;
+    }
+
+    const SUBPIXEL_OFFSETS: [f64; 4] = [0.125, 0.375, 0.625, 0.875];
+    let mut covered = 0;
+    for sample_y in SUBPIXEL_OFFSETS {
+        for sample_x in SUBPIXEL_OFFSETS {
+            let pixel_x = x as f64 + sample_x - 0.5;
+            let pixel_y = y as f64 + sample_y - 0.5;
+            if rounded_rect_contains_at(rect, radius, pixel_x, pixel_y) {
+                covered += 1;
+            }
+        }
+    }
+
+    ((covered * 255 + 8) / 16) as u8
+}
+
+fn rounded_rect_contains_at(rect: Rect, radius: i32, x: f64, y: f64) -> bool {
+    if x < rect.x as f64
+        || y < rect.y as f64
+        || x >= (rect.x + rect.width) as f64
+        || y >= (rect.y + rect.height) as f64
+    {
+        return false;
+    }
+
+    let radius_i32 = radius.max(0);
+    let radius = radius_i32 as f64;
+    let radius_cubic = radius * radius * radius;
+    let local_x = x - rect.x as f64;
+    let local_y = y - rect.y as f64;
+    let right_edge = (rect.width - radius_i32) as f64;
+    let bottom_edge = (rect.height - radius_i32) as f64;
 
     let dx = if local_x < radius {
-        radius - local_x - 1
-    } else if local_x >= rect.width - radius {
-        local_x - (rect.width - radius)
+        radius - local_x - 1.0
+    } else if local_x >= right_edge {
+        local_x - right_edge
     } else {
-        0
+        0.0
     };
     let dy = if local_y < radius {
-        radius - local_y - 1
-    } else if local_y >= rect.height - radius {
-        local_y - (rect.height - radius)
+        radius - local_y - 1.0
+    } else if local_y >= bottom_edge {
+        local_y - bottom_edge
     } else {
-        0
+        0.0
     };
 
-    cubic(dx) + cubic(dy) <= radius_cubic
+    dx * dx * dx + dy * dy * dy <= radius_cubic
 }
-
-fn cubic(value: i32) -> i64 {
-    let value = value as i64;
-    value * value * value
-}
-
 fn put_pixel(canvas: &mut [u8], width: usize, x: usize, y: usize, color: u32) {
     let offset = (y * width + x) * 4;
     let pixel = color.to_le_bytes();
@@ -433,6 +458,69 @@ fn blend_pixel(canvas: &mut [u8], width: usize, x: usize, y: usize, color: u32, 
     let out_red = (source_red * source_alpha + destination_red * inverse_alpha + 127) / 255;
     let out_green = (source_green * source_alpha + destination_green * inverse_alpha + 127) / 255;
     let out_blue = (source_blue * source_alpha + destination_blue * inverse_alpha + 127) / 255;
+
+    let pixel = (out_alpha << 24) | (out_red << 16) | (out_green << 8) | out_blue;
+    canvas[offset..offset + 4].copy_from_slice(&pixel.to_le_bytes());
+}
+
+fn blend_pixel_with_coverage(
+    canvas: &mut [u8],
+    width: usize,
+    x: usize,
+    y: usize,
+    color: u32,
+    coverage: u8,
+) {
+    if coverage == 0 {
+        return;
+    }
+    if coverage == 255 {
+        put_pixel(canvas, width, x, y, color);
+        return;
+    }
+
+    let offset = (y * width + x) * 4;
+    let destination = u32::from_le_bytes(
+        canvas[offset..offset + 4]
+            .try_into()
+            .expect("pixel must be four bytes"),
+    );
+
+    let source_alpha = ((color >> 24) & 0xFF) as u64;
+    let source_red = ((color >> 16) & 0xFF) as u64;
+    let source_green = ((color >> 8) & 0xFF) as u64;
+    let source_blue = (color & 0xFF) as u64;
+
+    let destination_alpha = ((destination >> 24) & 0xFF) as u64;
+    let destination_red = ((destination >> 16) & 0xFF) as u64;
+    let destination_green = ((destination >> 8) & 0xFF) as u64;
+    let destination_blue = (destination & 0xFF) as u64;
+
+    let coverage = coverage as u64;
+    let inverse_coverage = 255 - coverage;
+
+    let source_alpha_weighted = source_alpha * coverage;
+    let destination_alpha_weighted = destination_alpha * inverse_coverage;
+    let out_alpha_numerator = source_alpha_weighted + destination_alpha_weighted;
+    let out_alpha = ((out_alpha_numerator + 127) / 255) as u32;
+
+    if out_alpha_numerator == 0 {
+        canvas[offset..offset + 4].copy_from_slice(&[0, 0, 0, 0]);
+        return;
+    }
+
+    let out_red = ((source_red * source_alpha_weighted
+        + destination_red * destination_alpha_weighted
+        + out_alpha_numerator / 2)
+        / out_alpha_numerator) as u32;
+    let out_green = ((source_green * source_alpha_weighted
+        + destination_green * destination_alpha_weighted
+        + out_alpha_numerator / 2)
+        / out_alpha_numerator) as u32;
+    let out_blue = ((source_blue * source_alpha_weighted
+        + destination_blue * destination_alpha_weighted
+        + out_alpha_numerator / 2)
+        / out_alpha_numerator) as u32;
 
     let pixel = (out_alpha << 24) | (out_red << 16) | (out_green << 8) | out_blue;
     canvas[offset..offset + 4].copy_from_slice(&pixel.to_le_bytes());
